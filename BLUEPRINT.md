@@ -86,7 +86,7 @@ Perubahan v0.5 (TASK-001): Dependensi dan perintah uji terverifikasi via npm ls 
   - PWA mengirim JSON (`Content-Type: text/plain`) ke URL `/exec`; skrip memeriksa kunci rahasia lalu menulis/membaca tab `services`, `persons`, `access`, `logs`, `handoff`.
   - Skrip Apps Script ditulis AI dan disalin serta di-deploy oleh pengguna; akses deploy "siapa saja dengan tautan" dilindungi kunci rahasia.
   - Risiko: pemegang URL + kunci dapat membaca/menulis sheet. Data terbatas pada email/identitas akun, label, catatan, dan log; tanpa password.
-  - Perilaku CORS/redirect Apps Script dari PWA BELUM TERVERIFIKASI; wajib diuji di TASK-010 sebelum dianggap berfungsi.
+  - Perilaku CORS/redirect Apps Script dari PWA TERVERIFIKASI (TASK-010): Penggunaan `Content-Type: text/plain;charset=utf-8` dengan payload JSON pada metode `POST` melewati preflight OPTIONS browser, diterima di `e.postData.contents`, dan mengembalikan status serta latensi koneksi (probe) dengan sukses. Skrip `apps-script/Code.gs` dan klien `src/backup/sheet-probe.ts` telah diuji.
 * Layanan AI (AI Studio, Claude, OpenAI, DeepSeek, X): hanya tautan keluar, tanpa API.
 
 ---

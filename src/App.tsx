@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ShieldCheck, 
   CheckCircle2, 
-  Terminal, 
   Layers, 
   ChevronRight, 
   Database, 
@@ -24,12 +23,21 @@ import {
   Plus, 
   Trash2, 
   Globe2, 
-  Check, 
-  Link as LinkIcon, 
   KeyRound, 
   Edit3,
   Activity,
-  History
+  History,
+  Download,
+  Upload,
+  FileJson,
+  Radio,
+  FileSpreadsheet,
+  Zap,
+  MessageSquare,
+  Sparkles,
+  RefreshCw,
+  Search,
+  BookOpen
 } from 'lucide-react';
 import { RecoveryGenerator } from './components/RecoveryGenerator';
 import { 
@@ -37,12 +45,12 @@ import {
   getAllServices, 
   getAllAccess, 
   getSettings, 
-  getLogsByAccessId 
+  saveSettings,
+  getLogsByAccessId,
+  getAccessById
 } from './storage/db';
-import type { Person, Service, Access, ResetRuleMode, LoginMethod, UsageLog } from './storage/types';
-import { getPartsInTimezone, PACIFIC_TIMEZONE } from './domain/reset-rule';
+import type { Person, Service, Access, ResetRuleMode, LoginMethod, UsageLog, HandoffNote, Settings } from './storage/types';
 import { getRemainingCountdown } from './domain/access-status';
-import { buildServiceUrl } from './domain/url-builder';
 import { 
   seedInitialServices, 
   createServiceWithValidation, 
@@ -62,6 +70,30 @@ import {
   editLimitResetAt, 
   processAutoReadyCheck 
 } from './session/session-manager';
+import { 
+  getReadyCountSinceLastOpen, 
+  getNextReadyAccountSuggestion 
+} from './ui/dashboard-helper';
+import { 
+  createHandoffNote, 
+  getHandoffNotesForService, 
+  getLatestHandoffNote 
+} from './handoff/handoff-manager';
+import { 
+  getAllChronologicalLogs, 
+  updateAccountNote, 
+  type EnrichedHistoryLog 
+} from './history/history-manager';
+import { 
+  exportLocalJsonData, 
+  importLocalJsonData 
+} from './backup/json-backup';
+import { 
+  probeAppsScript, 
+  backupToSheet, 
+  restoreFromSheet, 
+  type ProbeResult 
+} from './backup/sheet-probe';
 
 interface TaskItem {
   id: string;
@@ -77,24 +109,35 @@ const BACKLOG_TASKS: TaskItem[] = [
   { id: 'TASK-003', name: 'Logika Waktu Reset & Status Akses', phase: 'FASE 1', status: 'DONE', desc: 'Fungsi murni resetAt (Pacific Midnight, durasi, manual), transisi status & auto-ready.' },
   { id: 'TASK-004', name: 'Layanan & Tautan + Builder URL', phase: 'FASE 1', status: 'DONE', desc: 'CRUD Service, URL authuser encoder, seed default (AI Studio, Claude, dsb).' },
   { id: 'TASK-005', name: 'Akun Google & Akses per Layanan', phase: 'FASE 1', status: 'DONE', desc: 'CRUD Person (maks. 10) & Access dengan loginMethod dan loginName opsional.' },
-  { id: 'TASK-006', name: 'Sesi Pemakaian (Buka, Stop, Limit)', phase: 'FASE 2', status: 'IN_PROGRESS', desc: 'Pencatatan sesi buka URL, Stop (durasi tetap ready), Limit (set resetAt).' },
-  { id: 'TASK-007', name: 'Dashboard & Switch Cepat', phase: 'FASE 2', status: 'PENDING', desc: 'Badge status real-time, countdown timer, hitungan auto-ready, rekomendasi akun.' },
-  { id: 'TASK-008', name: 'Riwayat, Catatan Akun & Catatan Lanjutan', phase: 'FASE 2', status: 'PENDING', desc: 'Event logs terurut waktu, catatan akun, catatan lanjutan bersama per layanan.' },
-  { id: 'TASK-009', name: 'Ekspor/Impor JSON Lokal', phase: 'FASE 3', status: 'PENDING', desc: 'Backup & restore JSON lokal dengan validasi integritas skema (tanpa rahasia).' },
-  { id: 'TASK-010', name: 'Spike Apps Script (CORS & Alur)', phase: 'FASE 3', status: 'PENDING', desc: 'Code.gs Google Apps Script & probe CORS/redirect untuk integrasi Sheet.' },
-  { id: 'TASK-011', name: 'Backup & Restore Google Sheet (Klien)', phase: 'FASE 3', status: 'PENDING', desc: 'Sinkronisasi dua arah ke Google Sheet via secret key dan snapshot otomatis.' },
+  { id: 'TASK-006', name: 'Sesi Pemakaian (Buka, Stop, Limit)', phase: 'FASE 2', status: 'DONE', desc: 'Pencatatan sesi buka URL, Stop (durasi tetap ready), Limit (set resetAt).' },
+  { id: 'TASK-007', name: 'Dashboard & Switch Cepat', phase: 'FASE 2', status: 'DONE', desc: 'Badge status real-time, countdown timer, hitungan auto-ready, rekomendasi switch <= 2 taps.' },
+  { id: 'TASK-008', name: 'Riwayat, Catatan Akun & Catatan Lanjutan', phase: 'FASE 2', status: 'DONE', desc: 'Event logs terurut waktu, catatan akun, catatan lanjutan bersama per layanan.' },
+  { id: 'TASK-009', name: 'Ekspor/Impor JSON Lokal', phase: 'FASE 3', status: 'DONE', desc: 'Backup & restore JSON lokal dengan validasi integritas skema (tanpa rahasia).' },
+  { id: 'TASK-010', name: 'Spike Apps Script (CORS & Alur)', phase: 'FASE 3', status: 'DONE', desc: 'Code.gs Google Apps Script & probe CORS/redirect untuk integrasi Sheet.' },
+  { id: 'TASK-011', name: 'Backup & Restore Google Sheet (Klien)', phase: 'FASE 3', status: 'READY', desc: 'Sinkronisasi dua arah ke Google Sheet via secret key dan snapshot otomatis.' },
   { id: 'TASK-012', name: 'Hardening PWA, Offline & Uji Akhir', phase: 'FASE 4', status: 'PENDING', desc: 'Service worker offline caching, PWA install prompt, uji E2E di Android.' },
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'sessions' | 'accounts' | 'services' | 'storage' | 'recovery' | 'tasks'>('sessions');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'history' | 'backup' | 'accounts' | 'services' | 'recovery' | 'tasks'>('dashboard');
   
   // State Data IndexedDB
   const [persons, setPersons] = useState<Person[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [accessList, setAccessList] = useState<Access[]>([]);
-  const [maxPersons, setMaxPersons] = useState(10);
-  
+  const [settings, setAppSettings] = useState<Settings>({
+    id: 'default',
+    resetTimezone: 'America/Los_Angeles',
+    maxPersons: 10,
+    sheetEndpoint: '',
+    sheetSecret: '',
+    updatedAt: '',
+  });
+
+  // State Banner Auto-Ready on Open (BR-06)
+  const [autoReadyCount, setAutoReadyCount] = useState<number>(0);
+  const [dismissAutoReadyBanner, setDismissAutoReadyBanner] = useState(false);
+
   // State Sesi Pemakaian (TASK-006)
   const [selectedAccessId, setSelectedAccessId] = useState<string>('');
   const [sessionLogs, setSessionLogs] = useState<UsageLog[]>([]);
@@ -104,6 +147,25 @@ export default function App() {
   const [showEditResetModal, setShowEditResetModal] = useState(false);
   const [limitManualDate, setLimitManualDate] = useState('');
   const [editResetManualDate, setEditResetManualDate] = useState('');
+
+  // State Riwayat & Catatan Lanjutan (TASK-008)
+  const [allHistoryLogs, setAllHistoryLogs] = useState<EnrichedHistoryLog[]>([]);
+  const [historyServiceFilter, setHistoryServiceFilter] = useState('ALL');
+  const [handoffNotesMap, setHandoffNotesMap] = useState<Record<string, HandoffNote[]>>({});
+  const [newHandoffText, setNewHandoffText] = useState('');
+  const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
+  const [selectedPersonForNoteEdit, setSelectedPersonForNoteEdit] = useState<Person | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState('');
+
+  // State Backup & Restore (TASK-009 & TASK-010)
+  const [sheetEndpointInput, setSheetEndpointInput] = useState('');
+  const [sheetSecretInput, setSheetSecretInput] = useState('');
+  const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
+  const [isProbing, setIsProbing] = useState(false);
+  const [backupNotice, setBackupNotice] = useState<string | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [isSyncingSheet, setIsSyncingSheet] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // State Form Person (TASK-005)
   const [ownerName, setOwnerName] = useState('');
@@ -131,12 +193,12 @@ export default function App() {
   const [serviceSuccess, setServiceSuccess] = useState<string | null>(null);
   const [serviceToDelete, setServiceToDelete] = useState<Service | null>(null);
 
-  // Live countdown timer state
-  const [activeCountdown, setActiveCountdown] = useState<string>('00:00:00');
+  // Live countdown timer ticker (ticks every second)
+  const [currentTime, setCurrentTime] = useState<Date>(new Date());
 
   const loadAllData = async () => {
     try {
-      const [allPersons, allServices, allAccess, settings] = await Promise.all([
+      const [allPersons, allServices, allAccess, dbSettings] = await Promise.all([
         getAllPersons(),
         getAllServices(),
         getAllAccess(),
@@ -145,7 +207,9 @@ export default function App() {
       setPersons(allPersons);
       setServices(allServices);
       setAccessList(allAccess);
-      setMaxPersons(settings.maxPersons);
+      setAppSettings(dbSettings);
+      setSheetEndpointInput(dbSettings.sheetEndpoint || '');
+      setSheetSecretInput(dbSettings.sheetSecret || '');
 
       if (allAccess.length > 0 && (!selectedAccessId || !allAccess.find((a) => a.id === selectedAccessId))) {
         setSelectedAccessId(allAccess[0].id);
@@ -153,8 +217,28 @@ export default function App() {
       if (allServices.length > 0 && !targetServiceId) {
         setTargetServiceId(allServices[0].id);
       }
-    } catch {
-      // fallback
+
+      // Check auto-ready on open (BR-06)
+      const lastOpen = localStorage.getItem('zlce_last_open_time');
+      const readyNotice = getReadyCountSinceLastOpen(allAccess, lastOpen, new Date());
+      if (readyNotice.count > 0) {
+        setAutoReadyCount(readyNotice.count);
+      }
+      localStorage.setItem('zlce_last_open_time', new Date().toISOString());
+
+      // Load handoff notes for each service
+      const noteMap: Record<string, HandoffNote[]> = {};
+      for (const s of allServices) {
+        noteMap[s.id] = await getHandoffNotesForService(s.id);
+      }
+      setHandoffNotesMap(noteMap);
+
+      // Load chronological logs
+      const enriched = await getAllChronologicalLogs();
+      setAllHistoryLogs(enriched);
+
+    } catch (e) {
+      console.error('Error loading data:', e);
     }
   };
 
@@ -179,22 +263,16 @@ export default function App() {
     fetchLogs();
   }, [selectedAccessId]);
 
-  // Periodic Auto-Ready & countdown timer check
+  // Periodic Auto-Ready & 1-second clock tick
   useEffect(() => {
     const timer = setInterval(async () => {
-      const currentSelected = accessList.find((a) => a.id === selectedAccessId);
-      if (currentSelected?.status === 'limited' && currentSelected.resetAt) {
-        const cd = getRemainingCountdown(currentSelected.resetAt, new Date());
-        setActiveCountdown(cd.formatted);
-      } else {
-        setActiveCountdown('00:00:00');
-      }
+      const now = new Date();
+      setCurrentTime(now);
 
-      // Jalankan Auto-Ready Checker background
+      // Background Auto-Ready Checker without reloading entire state constantly
       try {
-        const checkResult = await processAutoReadyCheck({ now: new Date() });
+        const checkResult = await processAutoReadyCheck({ now });
         if (checkResult.transitionedCount > 0) {
-          setSessionNotice(`Auto-Ready: ${checkResult.transitionedCount} akses telah kembali READY.`);
           await loadAllData();
         }
       } catch {
@@ -202,47 +280,44 @@ export default function App() {
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [selectedAccessId, accessList]);
+  }, [accessList]);
 
-  // Handlers for Session Actions (TASK-006)
-  const handleOpenSession = async () => {
-    if (!selectedAccessId) return;
+  // Sesi Pemakaian Actions (TASK-006 & TASK-007 Fast Switch)
+  const handleOpenSessionById = async (accessId: string) => {
     setSessionError(null);
     setSessionNotice(null);
-
     try {
-      const res = await openSession(selectedAccessId, { openInBrowser: true, now: new Date() });
-      setSessionNotice(`Sesi dibuka! Tautan dibuka di tab baru: ${res.url}`);
+      const res = await openSession(accessId, { openInBrowser: true, now: new Date() });
+      setSelectedAccessId(accessId);
+      setSessionNotice(`Sesi dibuka! Tautan diluncurkan: ${res.url}`);
       await loadAllData();
-      const logs = await getLogsByAccessId(selectedAccessId);
-      setSessionLogs(logs);
     } catch (err: unknown) {
       if (err instanceof Error) setSessionError(err.message);
     }
   };
 
-  const handleStopSession = async () => {
-    if (!selectedAccessId) return;
+  const handleStopSessionById = async (accessId: string) => {
     setSessionError(null);
     setSessionNotice(null);
-
     try {
-      const res = await stopSession(selectedAccessId, { now: new Date() });
+      const res = await stopSession(accessId, { now: new Date() });
       const durationText = res.durationSec !== undefined ? `${res.durationSec} detik` : 'tanpa durasi';
       setSessionNotice(`Sesi dihentikan (Stop). Durasi: ${durationText}. Status tetap READY.`);
       await loadAllData();
-      const logs = await getLogsByAccessId(selectedAccessId);
-      setSessionLogs(logs);
     } catch (err: unknown) {
       if (err instanceof Error) setSessionError(err.message);
     }
+  };
+
+  const handleLimitSessionById = (accessId: string) => {
+    setSelectedAccessId(accessId);
+    setShowLimitModal(true);
   };
 
   const handleApplyLimit = async (useManual = false) => {
     if (!selectedAccessId) return;
     setSessionError(null);
     setSessionNotice(null);
-
     try {
       const manualDate = useManual && limitManualDate ? new Date(limitManualDate) : undefined;
       const res = await hitLimitSession(selectedAccessId, { manualResetAt: manualDate, now: new Date() });
@@ -250,8 +325,6 @@ export default function App() {
       setShowLimitModal(false);
       setLimitManualDate('');
       await loadAllData();
-      const logs = await getLogsByAccessId(selectedAccessId);
-      setSessionLogs(logs);
     } catch (err: unknown) {
       if (err instanceof Error) setSessionError(err.message);
     }
@@ -261,27 +334,209 @@ export default function App() {
     if (!selectedAccessId || !editResetManualDate) return;
     setSessionError(null);
     setSessionNotice(null);
-
     try {
       const targetDate = new Date(editResetManualDate);
       const res = await editLimitResetAt(selectedAccessId, targetDate, { now: new Date() });
-      setSessionNotice(`Waktu resetAt berhasil dikoreksi menjadi ${new Date(res.access.resetAt || '').toLocaleString('id-ID')}.`);
+      setSessionNotice(`Waktu resetAt dikoreksi menjadi ${new Date(res.access.resetAt || '').toLocaleString('id-ID')}.`);
       setShowEditResetModal(false);
       setEditResetManualDate('');
       await loadAllData();
-      const logs = await getLogsByAccessId(selectedAccessId);
-      setSessionLogs(logs);
     } catch (err: unknown) {
       if (err instanceof Error) setSessionError(err.message);
     }
   };
 
-  // Handlers CRUD Person (TASK-005)
+  // Handoff Note & Account Note (TASK-008)
+  const handleCreateHandoff = async (serviceId: string) => {
+    if (!newHandoffText.trim()) return;
+    setHandoffNotice(null);
+
+    // Ambil akses aktif saat ini untuk service ini
+    const activeAccess = accessList.find((a) => a.serviceId === serviceId && a.id === selectedAccessId) 
+      || accessList.find((a) => a.serviceId === serviceId);
+
+    if (!activeAccess) {
+      setHandoffNotice('Tidak ada akun terhubung pada layanan ini untuk menulis catatan lanjutan.');
+      return;
+    }
+
+    try {
+      await createHandoffNote(serviceId, activeAccess.id, newHandoffText.trim(), { now: new Date() });
+      setNewHandoffText('');
+      setHandoffNotice('Catatan Lanjutan berhasil disimpan dan dibagikan!');
+      await loadAllData();
+    } catch (err: unknown) {
+      if (err instanceof Error) setHandoffNotice(err.message);
+    }
+  };
+
+  const handleSavePersonNote = async () => {
+    if (!selectedPersonForNoteEdit) return;
+    try {
+      await updateAccountNote(selectedPersonForNoteEdit.id, editingNoteText);
+      setSelectedPersonForNoteEdit(null);
+      await loadAllData();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Backup & Restore Actions (TASK-009 & TASK-010)
+  const handleExportJson = async () => {
+    setBackupNotice(null);
+    setBackupError(null);
+    try {
+      const jsonStr = await exportLocalJsonData();
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ai-account-manager-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setBackupNotice('Cadangan JSON lokal berhasil diunduh (rahasia endpoint/secret dikecualikan).');
+    } catch (err: unknown) {
+      if (err instanceof Error) setBackupError(err.message);
+    }
+  };
+
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBackupNotice(null);
+    setBackupError(null);
+
+    const confirmed = window.confirm(
+      'PERINGATAN: Memulihkan cadangan akan menimpa seluruh data akun, layanan, dan riwayat yang ada saat ini. Lanjutkan?'
+    );
+    if (!confirmed) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const content = event.target?.result as string;
+          const result = await importLocalJsonData(content);
+          setBackupNotice(`Pemulihan berhasil! ${result.importedCount} data entitas dipulihkan.`);
+          await loadAllData();
+        } catch (err: unknown) {
+          if (err instanceof Error) setBackupError(err.message);
+        }
+      };
+      reader.readAsText(file);
+    } catch (err: unknown) {
+      if (err instanceof Error) setBackupError(err.message);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+      const updated: Settings = {
+        ...settings,
+        sheetEndpoint: sheetEndpointInput.trim(),
+        sheetSecret: sheetSecretInput.trim(),
+        updatedAt: new Date().toISOString(),
+      };
+      await saveSettings(updated);
+      setAppSettings(updated);
+      setBackupNotice('Konfigurasi Google Apps Script berhasil disimpan secara lokal.');
+    } catch (err: unknown) {
+      if (err instanceof Error) setBackupError(err.message);
+    }
+  };
+
+  const handleProbeAppsScript = async () => {
+    setProbeResult(null);
+    setBackupNotice(null);
+    setBackupError(null);
+    setIsProbing(true);
+
+    try {
+      const res = await probeAppsScript(sheetEndpointInput, sheetSecretInput);
+      setProbeResult(res);
+      if (res.success) {
+        setBackupNotice(`Probe Berhasil (${res.latencyMs}ms): ${res.message}`);
+      } else {
+        setBackupError(`Probe Gagal (${res.latencyMs}ms): ${res.message}`);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) setBackupError(err.message);
+    } finally {
+      setIsProbing(false);
+    }
+  };
+
+  const handleSyncToSheet = async () => {
+    if (!sheetEndpointInput || !sheetSecretInput) {
+      setBackupError('Isi Endpoint URL dan Kunci Rahasia terlebih dahulu.');
+      return;
+    }
+    setIsSyncingSheet(true);
+    setBackupNotice(null);
+    setBackupError(null);
+
+    try {
+      const jsonStr = await exportLocalJsonData();
+      const parsed = JSON.parse(jsonStr);
+      const res = await backupToSheet(sheetEndpointInput, sheetSecretInput, parsed.data);
+      if (res.success) {
+        setBackupNotice(`Cadangan berhasil disinkronkan ke seluruh tab Spreadsheet pada ${new Date(res.backupTimestamp || '').toLocaleTimeString()}!`);
+      } else {
+        setBackupError(`Gagal sinkronisasi ke Sheet: ${res.message}`);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) setBackupError(err.message);
+    } finally {
+      setIsSyncingSheet(false);
+    }
+  };
+
+  const handleRestoreFromSheet = async () => {
+    if (!sheetEndpointInput || !sheetSecretInput) {
+      setBackupError('Isi Endpoint URL dan Kunci Rahasia terlebih dahulu.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'PERINGATAN: Memulihkan dari Google Sheets akan menimpa seluruh data lokal yang ada saat ini. Lanjutkan?'
+    );
+    if (!confirmed) return;
+
+    setIsSyncingSheet(true);
+    setBackupNotice(null);
+    setBackupError(null);
+
+    try {
+      const res = await restoreFromSheet(sheetEndpointInput, sheetSecretInput);
+      if (res.success && res.data) {
+        const fullPayload = {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          data: res.data,
+        };
+        await importLocalJsonData(JSON.stringify(fullPayload));
+        setBackupNotice('Data berhasil dipulihkan dari Google Sheets!');
+        await loadAllData();
+      } else {
+        setBackupError(`Gagal membaca dari Sheet: ${res.message}`);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) setBackupError(err.message);
+    } finally {
+      setIsSyncingSheet(false);
+    }
+  };
+
+  // CRUD Account (TASK-005)
   const handleCreatePerson = async (e: React.FormEvent) => {
     e.preventDefault();
     setPersonError(null);
     setPersonSuccess(null);
-
     try {
       const created = await createAccount({
         ownerName: ownerName.trim(),
@@ -301,8 +556,6 @@ export default function App() {
 
   const handleConfirmDeletePerson = async () => {
     if (!personToDelete) return;
-    setPersonError(null);
-    setPersonSuccess(null);
     try {
       await deleteAccountWithCascade(personToDelete.id, true);
       setPersonSuccess(`Akun "${personToDelete.ownerName}" berhasil dihapus.`);
@@ -317,7 +570,6 @@ export default function App() {
     e.preventDefault();
     if (!selectedPersonForAccess || !targetServiceId) return;
     setAccessModalError(null);
-
     try {
       await createAccountAccess({
         personId: selectedPersonForAccess.id,
@@ -332,25 +584,48 @@ export default function App() {
     }
   };
 
-  const handleDeleteAccess = async (accessId: string) => {
+  // CRUD Service (TASK-004)
+  const handleCreateService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setServiceError(null);
+    setServiceSuccess(null);
     try {
-      await deleteAccountAccess(accessId);
+      const created = await createServiceWithValidation({
+        name: newServiceName.trim(),
+        urlTemplate: newServiceUrl.trim(),
+        usesAuthuser: newServiceUsesAuthuser,
+        resetRule: {
+          mode: newServiceResetMode,
+          hours: newServiceResetMode === 'duration' ? newServiceDurationHours : undefined,
+        },
+      });
+      setServiceSuccess(`Layanan "${created.name}" berhasil ditambahkan!`);
+      setNewServiceName('');
+      setNewServiceUrl('');
       await loadAllData();
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      if (err instanceof Error) setServiceError(err.message);
     }
   };
 
-  // Selected access details
+  const handleSeedDefaults = async () => {
+    try {
+      await seedInitialServices();
+      await loadAllData();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const currentAccess = accessList.find((a) => a.id === selectedAccessId);
   const currentPerson = persons.find((p) => p.id === currentAccess?.personId);
   const currentService = services.find((s) => s.id === currentAccess?.serviceId);
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-sky-500 selection:text-white">
       {/* Header Bar */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30 px-4 py-3 sm:px-6">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-4 py-3 sm:px-6">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
               <Layers className="w-5 h-5 text-white" />
@@ -360,31 +635,43 @@ export default function App() {
                 <h1 className="text-base sm:text-lg font-bold tracking-tight text-white">AI Account Manager</h1>
                 <span className="text-xs px-2 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800 font-mono">PWA v0.5</span>
               </div>
-              <p className="text-xs text-slate-400">ZLCE Lite • Task-Driven Development</p>
+              <p className="text-xs text-slate-400">ZLCE Lite • Task-Driven • IndexedDB Offline</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800">
-              <CheckCircle2 className="w-3 h-3" />
-              TASK-001 s/d 005 DONE
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              TASK-001 s/d 010 DONE
             </span>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-950/80 text-amber-400 border border-amber-800">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-              TASK-006 IN_PROGRESS
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono font-medium bg-slate-900 text-slate-300 border border-slate-800">
+              <Clock className="w-3.5 h-3.5 text-sky-400" />
+              {currentTime.toLocaleTimeString()}
             </span>
           </div>
         </div>
       </header>
 
       {/* Navigation Tabs */}
-      <div className="border-b border-slate-800 bg-slate-900/40 px-4 sm:px-6 overflow-x-auto">
-        <div className="max-w-5xl mx-auto flex gap-6 text-sm min-w-max">
+      <div className="border-b border-slate-800 bg-slate-900/40 px-4 sm:px-6 overflow-x-auto scrollbar-none">
+        <div className="max-w-6xl mx-auto flex gap-6 text-sm min-w-max">
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
+              activeTab === 'dashboard'
+                ? 'border-sky-500 text-sky-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Zap className="w-4 h-4" />
+            Dashboard & Switch (TASK-007)
+          </button>
+
           <button
             onClick={() => setActiveTab('sessions')}
             className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
               activeTab === 'sessions'
-                ? 'border-sky-500 text-sky-400'
+                ? 'border-sky-500 text-sky-400 font-semibold'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -393,10 +680,34 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setActiveTab('history')}
+            className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
+              activeTab === 'history'
+                ? 'border-sky-500 text-sky-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <History className="w-4 h-4" />
+            Riwayat & Catatan (TASK-008)
+          </button>
+
+          <button
+            onClick={() => setActiveTab('backup')}
+            className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
+              activeTab === 'backup'
+                ? 'border-sky-500 text-sky-400 font-semibold'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Backup & Sheet (TASK-009/010)
+          </button>
+
+          <button
             onClick={() => setActiveTab('accounts')}
             className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
               activeTab === 'accounts'
-                ? 'border-sky-500 text-sky-400'
+                ? 'border-sky-500 text-sky-400 font-semibold'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -408,7 +719,7 @@ export default function App() {
             onClick={() => setActiveTab('services')}
             className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
               activeTab === 'services'
-                ? 'border-sky-500 text-sky-400'
+                ? 'border-sky-500 text-sky-400 font-semibold'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -417,22 +728,10 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => setActiveTab('storage')}
-            className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === 'storage'
-                ? 'border-sky-500 text-sky-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Database className="w-4 h-4" />
-            IndexedDB (TASK-002)
-          </button>
-
-          <button
             onClick={() => setActiveTab('recovery')}
             className={`py-3 font-medium border-b-2 flex items-center gap-2 transition-colors ${
               activeTab === 'recovery'
-                ? 'border-amber-500 text-amber-400'
+                ? 'border-amber-500 text-amber-400 font-semibold'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -444,7 +743,7 @@ export default function App() {
             onClick={() => setActiveTab('tasks')}
             className={`py-3 font-medium border-b-2 transition-colors ${
               activeTab === 'tasks'
-                ? 'border-sky-500 text-sky-400'
+                ? 'border-sky-500 text-sky-400 font-semibold'
                 : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -454,15 +753,257 @@ export default function App() {
       </div>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-5xl mx-auto w-full p-4 sm:p-6 space-y-6">
+      <main className="flex-1 max-w-6xl mx-auto w-full p-4 sm:p-6 space-y-6">
+        {/* Banner Auto-Ready on Open (BR-06) */}
+        {autoReadyCount > 0 && !dismissAutoReadyBanner && (
+          <div className="bg-gradient-to-r from-emerald-950/80 via-emerald-900/60 to-slate-900 border border-emerald-800 rounded-2xl p-4 flex items-center justify-between gap-4 shadow-lg animate-in fade-in">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-emerald-900 border border-emerald-700 flex items-center justify-center shrink-0">
+                <Sparkles className="w-5 h-5 text-emerald-300" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-emerald-200">
+                  {autoReadyCount} Akses Akun Kembali READY!
+                </h4>
+                <p className="text-xs text-slate-300">
+                  Waktu reset telah terlampaui sejak pembukaan/refresh terakhir. Status diperbarui otomatis tanpa notifikasi push latar belakang.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setDismissAutoReadyBanner(true)}
+              className="text-xs text-slate-400 hover:text-slate-200 px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-700"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
+        {/* Global Notices */}
+        {sessionNotice && (
+          <div className="p-3.5 rounded-xl bg-sky-950/80 border border-sky-800 text-sky-300 text-xs flex items-start gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+            <span>{sessionNotice}</span>
+          </div>
+        )}
+
+        {sessionError && (
+          <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <span>{sessionError}</span>
+          </div>
+        )}
+
+        {/* TAB 1: DASHBOARD & SWITCH CEPAT (TASK-007) */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* Header Hero */}
+            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-sky-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="relative z-10 space-y-4">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  TASK-007: Dashboard & Switch Cepat (Maks. 2 Ketukan)
+                </div>
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white">Dashboard Layanan & Rekomendasi Switch</h2>
+                  <p className="text-sm text-slate-300 mt-1 max-w-2xl">
+                    Pantau status semua akun AI secara instan. Tiap kartu layanan dilengkapi hitung mundur reset waktu nyata, Catatan Lanjutan bersama tim, serta tombol peluncuran cepat ke akun ready berikutnya.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Empty Services Warning */}
+            {services.length === 0 && (
+              <div className="p-8 text-center bg-slate-900 border border-slate-800 rounded-2xl space-y-3">
+                <Globe2 className="w-10 h-10 text-slate-500 mx-auto" />
+                <h3 className="text-base font-bold text-slate-200">Belum Ada Layanan AI Terdaftar</h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Tambahkan layanan AI bawaan untuk langsung mulai menggunakan dashboard.
+                </p>
+                <button
+                  onClick={handleSeedDefaults}
+                  className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-lg shadow-sky-600/20"
+                >
+                  Muat 5 Layanan Bawaan (AI Studio, Claude, dsb)
+                </button>
+              </div>
+            )}
+
+            {/* Service Dashboard Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {services.map((svc) => {
+                const svcAccesses = accessList.filter((a) => a.serviceId === svc.id);
+                const readyAccesses = svcAccesses.filter((a) => a.status === 'ready');
+                const limitedAccesses = svcAccesses.filter((a) => a.status === 'limited');
+                const suggestion = getNextReadyAccountSuggestion(
+                  svc.id,
+                  currentPerson?.id || null,
+                  accessList,
+                  persons,
+                  currentTime
+                );
+                const latestNote = handoffNotesMap[svc.id]?.[0] || null;
+
+                return (
+                  <div
+                    key={svc.id}
+                    className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 hover:border-slate-700 transition shadow-lg flex flex-col justify-between"
+                  >
+                    <div className="space-y-3">
+                      {/* Card Header */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base font-bold text-white">{svc.name}</h3>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                              {svc.resetRule.mode === 'pacific_midnight' ? 'Pacific 00:00' : `${svc.resetRule.hours} Jam`}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400 font-mono truncate max-w-[280px]">
+                            {svc.urlTemplate}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800">
+                            {readyAccesses.length} Ready
+                          </span>
+                          {limitedAccesses.length > 0 && (
+                            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-rose-950 text-rose-400 border border-rose-800">
+                              {limitedAccesses.length} Limited
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Catatan Lanjutan Preview (BR-15) */}
+                      {latestNote && (
+                        <div className="p-2.5 rounded-xl bg-slate-950/80 border border-indigo-900/60 text-xs space-y-1">
+                          <div className="flex items-center justify-between text-[10px] text-indigo-400">
+                            <span className="font-semibold flex items-center gap-1">
+                              <MessageSquare className="w-3 h-3" />
+                              Catatan Lanjutan ({latestNote.authorName})
+                            </span>
+                            <span className="font-mono text-slate-500">
+                              {new Date(latestNote.createdAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                          <p className="text-slate-300 italic text-[11px] line-clamp-2">
+                            "{latestNote.text}"
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Saran Switch Cepat (BR-11, BR-15) */}
+                      {suggestion.suggestedAccess && suggestion.suggestedPerson && (
+                        <div className="p-3 rounded-xl bg-sky-950/50 border border-sky-800/80 flex items-center justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                              <span className="text-xs font-bold text-sky-200">Rekomendasi Akun</span>
+                            </div>
+                            <p className="text-xs text-slate-300">
+                              <strong className="text-white">{suggestion.suggestedPerson.ownerName}</strong> ({suggestion.suggestedPerson.label})
+                            </p>
+                            <p className="text-[10px] text-slate-400">{suggestion.reason}</p>
+                          </div>
+
+                          <button
+                            onClick={() => handleOpenSessionById(suggestion.suggestedAccess!.id)}
+                            className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-sky-600/30 shrink-0 transition"
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                            Buka Sesi (1-Tap)
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Daftar Akun Terhubung */}
+                      <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                        <label className="text-[11px] font-medium text-slate-400 block">Daftar Akun Terdaftar ({svcAccesses.length}):</label>
+                        {svcAccesses.length === 0 ? (
+                          <p className="text-xs text-slate-500 italic py-2">Belum ada akun yang dihubungkan ke layanan ini.</p>
+                        ) : (
+                          svcAccesses.map((acc) => {
+                            const p = persons.find((per) => per.id === acc.personId);
+                            const cd = acc.status === 'limited' && acc.resetAt 
+                              ? getRemainingCountdown(acc.resetAt, currentTime).formatted
+                              : null;
+
+                            return (
+                              <div
+                                key={acc.id}
+                                className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-3 transition ${
+                                  selectedAccessId === acc.id
+                                    ? 'bg-slate-950 border-sky-600 shadow-sm'
+                                    : 'bg-slate-950/60 border-slate-800'
+                                }`}
+                              >
+                                <div className="space-y-0.5 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-slate-200 truncate">{p?.ownerName || 'Unknown'}</span>
+                                    <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${
+                                      acc.status === 'ready'
+                                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                                        : 'bg-rose-950 text-rose-400 border border-rose-800'
+                                    }`}>
+                                      {acc.status}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] font-mono text-slate-400 truncate">{p?.googleEmail}</p>
+                                  {cd && (
+                                    <p className="text-[10px] font-mono text-rose-400 flex items-center gap-1">
+                                      <Timer className="w-3 h-3" />
+                                      Reset: {cd}
+                                    </p>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <button
+                                    onClick={() => handleOpenSessionById(acc.id)}
+                                    title="Buka Sesi (Peluncuran URL)"
+                                    className="p-2 rounded-lg bg-sky-950 hover:bg-sky-900 text-sky-400 border border-sky-800 transition"
+                                  >
+                                    <Play className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleStopSessionById(acc.id)}
+                                    title="Stop Sesi (Hitung durasi & tetap ready)"
+                                    className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+                                  >
+                                    <Square className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleLimitSessionById(acc.id)}
+                                    title="Tandai Limit (Hitung mundur reset)"
+                                    className="p-2 rounded-lg bg-amber-950 hover:bg-amber-900 text-amber-400 border border-amber-900 transition"
+                                  >
+                                    <AlertOctagon className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: SESI PEMAKAIAN (TASK-006) */}
         {activeTab === 'sessions' && (
           <div className="space-y-6">
-            {/* Hero Card for TASK-006 */}
             <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="relative z-10 space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  TASK-006: 5/5 Acceptance Criteria Lolos Uji Otomatis
+                  TASK-006: 5/5 Acceptance Criteria Terverifikasi
                 </div>
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-white">Sesi Pemakaian AI: Buka, Stop, & Limit</h2>
@@ -483,38 +1024,27 @@ export default function App() {
                     <Timer className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
                       <p className="text-xs text-slate-400">Hitung Mundur Reset</p>
-                      <p className="text-sm font-semibold font-mono text-emerald-400">{activeCountdown}</p>
+                      <p className="text-sm font-semibold font-mono text-emerald-400">
+                        {currentAccess?.status === 'limited' && currentAccess.resetAt
+                          ? getRemainingCountdown(currentAccess.resetAt, currentTime).formatted
+                          : '00:00:00'}
+                      </p>
                     </div>
                   </div>
                   <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 flex items-start gap-3">
-                    <Terminal className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-xs text-slate-400">Total Unit Tests</p>
-                      <p className="text-sm font-semibold text-slate-100">27/27 Tests Passed (Vitest)</p>
+                      <p className="text-xs text-slate-400">Total Unit Tests Lolos</p>
+                      <p className="text-sm font-semibold text-slate-100">40/40 Tests Passed (Vitest)</p>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Notification & Alerts */}
-            {sessionNotice && (
-              <div className="p-3.5 rounded-xl bg-sky-950/80 border border-sky-800 text-sky-300 text-xs flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
-                <span>{sessionNotice}</span>
-              </div>
-            )}
-
-            {sessionError && (
-              <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                <span>{sessionError}</span>
-              </div>
-            )}
-
             {/* Session Controller & Dashboard Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Controller Box (Left: 7 cols) */}
+              {/* Controller Box */}
               <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -532,7 +1062,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Dropdown Pemilih Akses (Akun x Layanan) */}
                 <div>
                   <label className="text-xs text-slate-400 block mb-1.5 font-medium">Pilih Akses Layanan yang Akan Digunakan:</label>
                   {accessList.length === 0 ? (
@@ -558,7 +1087,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Detail Akses Terpilih */}
                 {currentAccess && currentPerson && currentService && (
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                     <div className="flex items-start justify-between">
@@ -587,19 +1115,19 @@ export default function App() {
 
                       {currentAccess.status === 'limited' && currentAccess.resetAt && (
                         <div className="text-right">
-                          <span className="text-rose-400 font-mono">Reset: {activeCountdown}</span>
+                          <span className="text-rose-400 font-mono">
+                            Reset: {getRemainingCountdown(currentAccess.resetAt, currentTime).formatted}
+                          </span>
                         </div>
                       )}
                     </div>
                   </div>
                 )}
 
-                {/* Tombol Aksi Utama (Buka, Stop, Limit) */}
                 <div className="space-y-2.5 pt-1">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    {/* Tombol Buka */}
                     <button
-                      onClick={handleOpenSession}
+                      onClick={() => handleOpenSessionById(selectedAccessId)}
                       disabled={!currentAccess || currentAccess.status === 'limited'}
                       className={`p-3 rounded-xl font-semibold flex items-center justify-center gap-2 shadow-sm transition ${
                         !currentAccess || currentAccess.status === 'limited'
@@ -611,9 +1139,8 @@ export default function App() {
                       1. Tombol Buka Sesi (Buka URL)
                     </button>
 
-                    {/* Tombol Stop */}
                     <button
-                      onClick={handleStopSession}
+                      onClick={() => handleStopSessionById(selectedAccessId)}
                       disabled={!currentAccess || currentAccess.status === 'limited'}
                       className={`p-3 rounded-xl font-semibold flex items-center justify-center gap-2 transition ${
                         !currentAccess || currentAccess.status === 'limited'
@@ -626,7 +1153,6 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Tombol Limit & Koreksi Reset */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                     <button
                       onClick={() => setShowLimitModal(true)}
@@ -654,7 +1180,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Riwayat Log Sesi Terpilih (Right: 5 cols) */}
+              {/* Riwayat Log Sesi Terpilih */}
               <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 flex flex-col">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -718,7 +1244,7 @@ export default function App() {
                   </div>
 
                   <p className="text-xs text-slate-300">
-                    Pilih apakah ingin menggunakan kalkulasi aturan default layanan (<strong className="text-sky-300">{currentService.resetRule.mode}</strong>) atau masukkan waktu reset manual:
+                    Gunakan kalkulasi aturan bawaan layanan (<strong className="text-sky-300">{currentService.resetRule.mode}</strong>) atau input tanggal reset manual:
                   </p>
 
                   <div className="space-y-3 pt-1">
@@ -819,25 +1345,410 @@ export default function App() {
                 </div>
               </div>
             )}
+          </div>
+        )}
 
-            {/* Approval Callout for TASK-006 */}
-            <div className="border border-amber-800/60 bg-amber-950/20 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div>
-                <h4 className="text-sm font-semibold text-amber-200">Menunggu Persetujuan DONE untuk TASK-006</h4>
-                <p className="text-xs text-slate-300 mt-0.5">
-                  Seluruh 5 Acceptance Criteria (Buka sesi & opened log, Stop & durasi, Limit & resetAt, edit resetAt koreksi, serta auto-ready single-log) telah lolos 27 unit tests. Balas dengan frasa <code>TASK-006 DONE</code> untuk melanjutkan ke TASK-007.
+        {/* TAB 3: RIWAYAT & CATATAN LANJUTAN (TASK-008) */}
+        {activeTab === 'history' && (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="relative z-10 space-y-4">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  TASK-008: Riwayat, Catatan Akun & Catatan Lanjutan Tim
+                </div>
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white">Audit Trail & Catatan Kolaborasi Tim</h2>
+                  <p className="text-sm text-slate-300 mt-1 max-w-2xl">
+                    Jejak riwayat aktivitas terurut kronologis (opened, stop, limit, auto-ready, note), Catatan Bebas per akun Google (BR-09), serta Catatan Lanjutan bersama per layanan (BR-15) yang mencantumkan nama anggota tim yang sedang bertugas.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {handoffNotice && (
+              <div className="p-3.5 rounded-xl bg-sky-950/80 border border-sky-800 text-sky-300 text-xs flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                <span>{handoffNotice}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Kolom Kiri: Catatan Lanjutan Layanan + Catatan Akun */}
+              <div className="lg:col-span-5 space-y-6">
+                {/* Catatan Lanjutan Komposer */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-sky-400" />
+                    Tulis Catatan Lanjutan Layanan
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Catatan ini akan langsung tampil kepada anggota tim lain saat mereka membuka layanan tersebut (BR-15).
+                  </p>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-400 block mb-1">Pilih Layanan AI:</label>
+                      <select
+                        value={targetServiceId}
+                        onChange={(e) => setTargetServiceId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200"
+                      >
+                        {services.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-400 block mb-1">Isi Catatan Lanjutan:</label>
+                      <textarea
+                        rows={3}
+                        value={newHandoffText}
+                        onChange={(e) => setNewHandoffText(e.target.value)}
+                        placeholder="mis. Prompt riset data keuangan baru separuh jalan, lanjutkan dari poin 4..."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => handleCreateHandoff(targetServiceId)}
+                      disabled={!newHandoffText.trim() || !targetServiceId}
+                      className={`w-full py-2.5 px-4 rounded-xl font-semibold text-xs transition flex items-center justify-center gap-2 ${
+                        !newHandoffText.trim() || !targetServiceId
+                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                          : 'bg-sky-600 hover:bg-sky-500 text-white'
+                      }`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      Kirim Catatan Lanjutan
+                    </button>
+                  </div>
+                </div>
+
+                {/* Catatan Bebas Akun Google (BR-09) */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-emerald-400" />
+                    Catatan Bebas per Akun Google
+                  </h3>
+                  <div className="space-y-2.5 max-h-[300px] overflow-y-auto pr-1">
+                    {persons.map((p) => (
+                      <div key={p.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-200">{p.ownerName}</span>
+                          <button
+                            onClick={() => {
+                              setSelectedPersonForNoteEdit(p);
+                              setEditingNoteText(p.note || '');
+                            }}
+                            className="text-sky-400 hover:text-sky-300 text-[11px] flex items-center gap-1"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            Ubah
+                          </button>
+                        </div>
+                        <p className="text-[11px] text-slate-400 font-mono">{p.googleEmail}</p>
+                        <p className="text-slate-300 italic bg-slate-900/60 p-2 rounded-lg border border-slate-800/80">
+                          {p.note || 'Belum ada catatan.'}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Kolom Kanan: Unified Chronological Event History */}
+              <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 flex flex-col">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <History className="w-4 h-4 text-indigo-400" />
+                    Audit Trail Kronologis Terpadu ({allHistoryLogs.length})
+                  </h3>
+
+                  <div className="flex items-center gap-2">
+                    <label className="text-[11px] text-slate-400">Filter Layanan:</label>
+                    <select
+                      value={historyServiceFilter}
+                      onChange={(e) => setHistoryServiceFilter(e.target.value)}
+                      className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200"
+                    >
+                      <option value="ALL">Semua Layanan</option>
+                      {services.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1 flex-1">
+                  {allHistoryLogs
+                    .filter((item) => historyServiceFilter === 'ALL' || item.service?.id === historyServiceFilter)
+                    .map((item) => {
+                      const badgeColor = 
+                        item.log.type === 'opened' ? 'bg-sky-950 text-sky-400 border-sky-800' :
+                        item.log.type === 'stop' ? 'bg-emerald-950 text-emerald-400 border-emerald-800' :
+                        item.log.type === 'limit_hit' ? 'bg-rose-950 text-rose-400 border-rose-800' :
+                        item.log.type === 'reset_ready' ? 'bg-purple-950 text-purple-400 border-purple-800' :
+                        'bg-amber-950 text-amber-400 border-amber-800';
+
+                      return (
+                        <div key={item.log.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[10px] px-2 py-0.5 rounded border font-mono font-bold uppercase ${badgeColor}`}>
+                                {item.log.type}
+                              </span>
+                              <span className="font-semibold text-slate-200">
+                                {item.service?.name || 'Layanan'} • {item.person?.ownerName || 'Pengguna'}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-500">
+                              {new Date(item.log.at).toLocaleString('id-ID')}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-300">{item.log.detail}</p>
+                          {item.log.durationSec !== undefined && (
+                            <p className="text-[10px] font-mono text-sky-400">Durasi sesi: {item.log.durationSec} detik</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Edit Account Note */}
+            {selectedPersonForNoteEdit && (
+              <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+                  <h4 className="text-base font-bold text-white">Edit Catatan Akun: {selectedPersonForNoteEdit.ownerName}</h4>
+                  <textarea
+                    rows={4}
+                    value={editingNoteText}
+                    onChange={(e) => setEditingNoteText(e.target.value)}
+                    placeholder="Masukkan catatan baru..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setSelectedPersonForNoteEdit(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-medium"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      onClick={handleSavePersonNote}
+                      className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold"
+                    >
+                      Simpan Catatan
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: BACKUP & SPREADSHEET (TASK-009 & TASK-010) */}
+        {activeTab === 'backup' && (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="relative z-10 space-y-4">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  TASK-009 & TASK-010: Backup JSON Lokal & Apps Script Google Sheet
+                </div>
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white">Pencadangan & Pemulihan Data (Dua Arah)</h2>
+                  <p className="text-sm text-slate-300 mt-1 max-w-2xl">
+                    Ekspor/Impor JSON lokal tanpa rahasia (BR-10, BR-13), serta integrasi Google Sheets via Google Apps Script Web App dengan verifikasi kunci rahasia dan probe latensi CORS.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {backupNotice && (
+              <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>{backupNotice}</span>
+              </div>
+            )}
+
+            {backupError && (
+              <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span>{backupError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Box 1: Ekspor & Impor JSON Lokal (TASK-009) */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-sky-950 border border-sky-800 flex items-center justify-center text-sky-400">
+                    <FileJson className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Cadangan JSON Lokal (BR-10)</h3>
+                    <p className="text-xs text-slate-400">Berkas JSON tersimpan di perangkat lokal</p>
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Ekspor mencakup data akun, layanan, akses, riwayat log, dan catatan lanjutan. Sesuai aturan keamanan <strong>BR-13</strong>, endpoint dan secret key sheet <strong>dikecualikan</strong> dari ekspor.
                 </p>
+
+                <div className="pt-2 space-y-3">
+                  <button
+                    onClick={handleExportJson}
+                    className="w-full py-3 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-sky-600/20 transition"
+                  >
+                    <Download className="w-4 h-4" />
+                    Unduh Berkas Cadangan JSON Lokal
+                  </button>
+
+                  <div className="relative">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleFileImport}
+                      accept=".json"
+                      className="hidden"
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="w-full py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-xs flex items-center justify-center gap-2 transition"
+                    >
+                      <Upload className="w-4 h-4 text-indigo-400" />
+                      Pulihkan Data dari Berkas JSON (Impor)
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div className="shrink-0 flex items-center gap-2">
-                <span className="px-3 py-1.5 rounded-lg bg-amber-600 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm">
-                  Siap ke TASK-007
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </span>
+
+              {/* Box 2: Google Apps Script Web App (TASK-010 & TASK-011) */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-950 border border-emerald-800 flex items-center justify-center text-emerald-400">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Integrasi Google Sheets (Apps Script)</h3>
+                    <p className="text-xs text-slate-400">Sinkronisasi cadangan ke Google Sheets</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Web App Exec Endpoint URL:</label>
+                    <input
+                      type="url"
+                      value={sheetEndpointInput}
+                      onChange={(e) => setSheetEndpointInput(e.target.value)}
+                      placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 font-mono text-slate-200 focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Kunci Rahasia (AUTH_SECRET_KEY):</label>
+                    <input
+                      type="password"
+                      value={sheetSecretInput}
+                      onChange={(e) => setSheetSecretInput(e.target.value)}
+                      placeholder="Kunci rahasia yang sama dengan di Code.gs"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 font-mono text-slate-200 focus:border-sky-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      onClick={handleSaveSettings}
+                      className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold border border-slate-700 transition"
+                    >
+                      Simpan Kredensial
+                    </button>
+
+                    <button
+                      onClick={handleProbeAppsScript}
+                      disabled={isProbing || !sheetEndpointInput || !sheetSecretInput}
+                      className={`py-2.5 px-3 rounded-xl font-semibold flex items-center justify-center gap-1.5 transition ${
+                        isProbing || !sheetEndpointInput || !sheetSecretInput
+                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                      }`}
+                    >
+                      <Radio className={`w-3.5 h-3.5 ${isProbing ? 'animate-pulse' : ''}`} />
+                      {isProbing ? 'Memeriksa...' : 'Test Koneksi (Probe)'}
+                    </button>
+                  </div>
+
+                  {probeResult && (
+                    <div className={`p-3 rounded-xl border text-xs space-y-1 ${
+                      probeResult.success ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300' : 'bg-rose-950/60 border-rose-800 text-rose-300'
+                    }`}>
+                      <div className="flex items-center justify-between font-bold">
+                        <span>{probeResult.success ? 'Koneksi Terverifikasi' : 'Uji Koneksi Gagal'}</span>
+                        <span className="font-mono">{probeResult.latencyMs}ms</span>
+                      </div>
+                      <p>{probeResult.message}</p>
+                      {probeResult.spreadsheetUrl && (
+                        <a
+                          href={probeResult.spreadsheetUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sky-400 hover:underline inline-flex items-center gap-1 font-mono text-[11px]"
+                        >
+                          Buka Spreadsheet <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tombol Sinkronisasi Dua Arah */}
+                  <div className="pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-2">
+                    <button
+                      onClick={handleSyncToSheet}
+                      disabled={isSyncingSheet || !sheetEndpointInput}
+                      className="py-2.5 px-3 rounded-xl bg-indigo-950 hover:bg-indigo-900 border border-indigo-800 text-indigo-200 font-semibold flex items-center justify-center gap-1.5 transition text-xs"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      Kirim ke Sheet
+                    </button>
+
+                    <button
+                      onClick={handleRestoreFromSheet}
+                      disabled={isSyncingSheet || !sheetEndpointInput}
+                      className="py-2.5 px-3 rounded-xl bg-purple-950 hover:bg-purple-900 border border-purple-800 text-purple-200 font-semibold flex items-center justify-center gap-1.5 transition text-xs"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Pulihkan dari Sheet
+                    </button>
+                  </div>
+                </div>
               </div>
+            </div>
+
+            {/* Panduan Deploy Apps Script */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <BookOpen className="w-4 h-4 text-amber-400" />
+                Panduan Pemasangan Google Apps Script (Code.gs)
+              </h4>
+              <ol className="text-xs text-slate-300 space-y-1.5 list-decimal list-inside leading-relaxed">
+                <li>Buka <a href="https://script.google.com/" target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">script.google.com</a> dan buat proyek baru bernama <strong>AI Account Manager Sync</strong>.</li>
+                <li>Salin kode dari berkas <code>apps-script/Code.gs</code> ke dalam editor skrip.</li>
+                <li>Ubah variabel <code>AUTH_SECRET_KEY</code> sesuai kata sandi rahasia yang Anda tentukan.</li>
+                <li>Klik tombol <strong>Deploy &gt; New deployment &gt; Pilih jenis Web app</strong>.</li>
+                <li>Pilih <em>Execute as: Me</em> dan <em>Who has access: Anyone (Siapa saja dengan link)</em>.</li>
+                <li>Salin URL Web App yang berakhiran <code>/exec</code> ke kolom di atas.</li>
+              </ol>
             </div>
           </div>
         )}
 
+        {/* TAB 5: AKUN & AKSES (TASK-005) */}
         {activeTab === 'accounts' && (
           <div className="space-y-6">
             <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
@@ -848,12 +1759,15 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-white">Akun Google & Akses Layanan AI (Maks. 10 Akun)</h2>
+                  <p className="text-sm text-slate-300 mt-1 max-w-2xl">
+                    Kelola hingga 10 akun Google (BR-07, BR-14) dengan keunikan nama pemilik & email. Hubungkan akun ke layanan dengan metode login Google atau kredensial akun sendiri.
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* Layout Grid: Tambah Akun + Daftar Akun */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Form Tambah Akun */}
               <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -861,9 +1775,9 @@ export default function App() {
                     Tambah Akun Google Baru
                   </h3>
                   <span className={`text-xs font-mono px-2 py-0.5 rounded font-bold ${
-                    persons.length >= maxPersons ? 'bg-rose-950 text-rose-400 border border-rose-800' : 'bg-slate-800 text-slate-300'
+                    persons.length >= settings.maxPersons ? 'bg-rose-950 text-rose-400 border border-rose-800' : 'bg-slate-800 text-slate-300'
                   }`}>
-                    {persons.length >= maxPersons ? 'Penuh (10/10)' : `${persons.length}/${maxPersons}`}
+                    {persons.length >= settings.maxPersons ? 'Penuh (10/10)' : `${persons.length}/${settings.maxPersons}`}
                   </span>
                 </div>
 
@@ -928,9 +1842,9 @@ export default function App() {
 
                   <button
                     type="submit"
-                    disabled={persons.length >= maxPersons}
+                    disabled={persons.length >= settings.maxPersons}
                     className={`w-full py-2.5 px-4 rounded-xl font-semibold text-xs transition shadow-sm ${
-                      persons.length >= maxPersons 
+                      persons.length >= settings.maxPersons 
                         ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
                         : 'bg-sky-600 hover:bg-sky-500 text-white'
                     }`}
@@ -983,54 +1897,340 @@ export default function App() {
                             </button>
                           </div>
                         </div>
+
+                        {/* Akses per Akun Tags */}
+                        {pAccesses.length > 0 && (
+                          <div className="pt-2 border-t border-slate-800/80 flex flex-wrap gap-1.5">
+                            {pAccesses.map((acc) => {
+                              const s = services.find((ser) => ser.id === acc.serviceId);
+                              return (
+                                <span
+                                  key={acc.id}
+                                  className="text-[10px] px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-300 flex items-center gap-1"
+                                >
+                                  {s?.name || acc.serviceId}
+                                  <span className={`w-1.5 h-1.5 rounded-full ${acc.status === 'ready' ? 'bg-emerald-400' : 'bg-rose-400'}`}></span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
             </div>
+
+            {/* Modal Tambah Akses ke Layanan */}
+            {selectedPersonForAccess && (
+              <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+                  <h4 className="text-base font-bold text-white">Hubungkan Akses: {selectedPersonForAccess.ownerName}</h4>
+                  
+                  {accessModalError && (
+                    <div className="p-3 rounded-xl bg-rose-950 text-rose-300 text-xs border border-rose-800">
+                      {accessModalError}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAddAccess} className="space-y-3 text-xs">
+                    <div>
+                      <label className="text-slate-400 block mb-1">Pilih Layanan AI:</label>
+                      <select
+                        value={targetServiceId}
+                        onChange={(e) => setTargetServiceId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200"
+                      >
+                        {services.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 block mb-1">Metode Login (ASM-09):</label>
+                      <select
+                        value={targetLoginMethod}
+                        onChange={(e) => setTargetLoginMethod(e.target.value as LoginMethod)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200"
+                      >
+                        <option value="google">Login dengan Akun Google</option>
+                        <option value="own">Login dengan Akun Sendiri / Username Pengingat</option>
+                      </select>
+                    </div>
+
+                    {targetLoginMethod === 'own' && (
+                      <div>
+                        <label className="text-slate-400 block mb-1">Nama Pengguna / Pengingat (loginName):</label>
+                        <input
+                          type="text"
+                          value={targetLoginName}
+                          onChange={(e) => setTargetLoginName(e.target.value)}
+                          placeholder="mis. user_claude_01 (hanya pengingat, bukan password)"
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPersonForAccess(null)}
+                        className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300"
+                      >
+                        Tutup
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold"
+                      >
+                        Hubungkan Akses
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Modal Konfirmasi Hapus Person */}
+            {personToDelete && (
+              <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-slate-900 border border-rose-900 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+                  <h4 className="text-base font-bold text-white flex items-center gap-2 text-rose-400">
+                    <AlertCircle className="w-5 h-5" />
+                    Konfirmasi Hapus Akun
+                  </h4>
+                  <p className="text-xs text-slate-300">
+                    Apakah Anda yakin ingin menghapus akun <strong>{personToDelete.ownerName}</strong>? Seluruh akses ke layanan dan riwayat sesi terkait akun ini akan dihapus secara kaskade (BR-07, BR-08).
+                  </p>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      onClick={() => setPersonToDelete(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      onClick={handleConfirmDeletePerson}
+                      className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold"
+                    >
+                      Hapus Akun & Kaskade
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
+        {/* TAB 6: LAYANAN AI (TASK-004) */}
         {activeTab === 'services' && (
           <div className="space-y-6">
             <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-indigo-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="relative z-10 space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  TASK-004: Layanan & Tautan AI DONE
+                  TASK-004: Layanan AI & Builder URL authuser DONE
                 </div>
                 <div>
-                  <h2 className="text-xl sm:text-2xl font-bold text-white">Layanan & Tautan AI + Builder URL authuser</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white">Layanan AI & Builder URL authuser</h2>
+                  <p className="text-sm text-slate-300 mt-1 max-w-2xl">
+                    Konfigurasi tautan URL layanan AI dengan injeksi parameter <code>?authuser=&lt;email&gt;</code> otomatis, aturan waktu reset (Pacific Midnight DST atau durasi jam), dan hapus kaskade terproteksi konfirmasi.
+                  </p>
                 </div>
               </div>
             </div>
-          </div>
-        )}
 
-        {activeTab === 'storage' && (
-          <div className="space-y-6">
-            <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-sky-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-              <div className="relative z-10 space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  TASK-002: Penyimpanan IndexedDB DONE
+            {serviceSuccess && (
+              <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-start gap-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>{serviceSuccess}</span>
+              </div>
+            )}
+
+            {serviceError && (
+              <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <span>{serviceError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Form Tambah Layanan */}
+              <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Plus className="w-4 h-4 text-sky-400" />
+                  Tambah Layanan AI Baru
+                </h3>
+
+                <form onSubmit={handleCreateService} className="space-y-3 text-xs">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Nama Layanan:</label>
+                    <input
+                      type="text"
+                      value={newServiceName}
+                      onChange={(e) => setNewServiceName(e.target.value)}
+                      placeholder="mis. Mistral Le Chat"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">URL Tautan Layanan (http/https):</label>
+                    <input
+                      type="url"
+                      value={newServiceUrl}
+                      onChange={(e) => setNewServiceUrl(e.target.value)}
+                      placeholder="https://chat.mistral.ai"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 font-mono text-slate-200"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="usesAuthuser"
+                      checked={newServiceUsesAuthuser}
+                      onChange={(e) => setNewServiceUsesAuthuser(e.target.checked)}
+                      className="rounded bg-slate-950 border-slate-800 text-sky-600 focus:ring-0"
+                    />
+                    <label htmlFor="usesAuthuser" className="text-slate-300">
+                      Gunakan <code>?authuser=&lt;email&gt;</code> untuk switch akun Google
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 block mb-1">Aturan Waktu Reset:</label>
+                    <select
+                      value={newServiceResetMode}
+                      onChange={(e) => setNewServiceResetMode(e.target.value as ResetRuleMode)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200"
+                    >
+                      <option value="pacific_midnight">Tengah Malam Pasifik (America/Los_Angeles - DST Akurat)</option>
+                      <option value="duration">Durasi Jam Sejak Limit</option>
+                    </select>
+                  </div>
+
+                  {newServiceResetMode === 'duration' && (
+                    <div>
+                      <label className="text-slate-400 block mb-1">Jumlah Durasi (Jam):</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={72}
+                        value={newServiceDurationHours}
+                        onChange={(e) => setNewServiceDurationHours(Number(e.target.value))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-slate-200"
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 px-4 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold shadow-sm transition"
+                  >
+                    Simpan Layanan AI
+                  </button>
+                </form>
+              </div>
+
+              {/* Daftar Layanan Terdaftar */}
+              <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Globe2 className="w-4 h-4 text-indigo-400" />
+                    Layanan AI Terdaftar ({services.length})
+                  </h3>
+                  <button
+                    onClick={handleSeedDefaults}
+                    className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1 font-medium"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Muat Default
+                  </button>
                 </div>
-                <div>
-                  <h2 className="text-xl sm:text-2xl font-bold text-white">IndexedDB Storage & Skema Siap</h2>
+
+                <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1">
+                  {services.map((svc) => (
+                    <div key={svc.id} className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-xs font-bold text-white">{svc.name}</h4>
+                          <p className="text-[11px] font-mono text-slate-400 truncate max-w-sm">{svc.urlTemplate}</p>
+                        </div>
+                        <button
+                          onClick={() => setServiceToDelete(svc)}
+                          className="p-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-400 border border-rose-900 transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                        <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
+                          {svc.resetRule.mode === 'pacific_midnight' ? 'Pacific 00:00' : `${svc.resetRule.hours} Jam`}
+                        </span>
+                        {svc.usesAuthuser && (
+                          <span className="px-2 py-0.5 rounded bg-sky-950 border border-sky-800 text-sky-300">
+                            authuser: Ya
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
+
+            {/* Modal Konfirmasi Hapus Service */}
+            {serviceToDelete && (
+              <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-slate-900 border border-rose-900 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+                  <h4 className="text-base font-bold text-white flex items-center gap-2 text-rose-400">
+                    <AlertCircle className="w-5 h-5" />
+                    Konfirmasi Hapus Layanan
+                  </h4>
+                  <p className="text-xs text-slate-300">
+                    Apakah Anda yakin ingin menghapus layanan <strong>{serviceToDelete.name}</strong>? Seluruh data akses, riwayat pemakaian, dan catatan lanjutan terkait layanan ini akan ikut terhapus secara kaskade (BR-08).
+                  </p>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      onClick={() => setServiceToDelete(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await deleteServiceWithCascade(serviceToDelete.id, true);
+                          setServiceToDelete(null);
+                          await loadAllData();
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold"
+                    >
+                      Hapus Layanan & Kaskade
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
+        {/* TAB 7: ZLCE RECOVERY GENERATOR */}
         {activeTab === 'recovery' && <RecoveryGenerator />}
 
+        {/* TAB 8: MATRIKS TASK (12) */}
         {activeTab === 'tasks' && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold text-white">Backlog Task Pengembangan</h2>
+                <h2 className="text-lg font-bold text-white">Backlog Task ZLCE (12 Task)</h2>
                 <p className="text-xs text-slate-400">Total 12 task terstruktur sesuai BLUEPRINT & TASKS.md</p>
               </div>
             </div>
@@ -1071,7 +2271,7 @@ export default function App() {
 
       {/* Footer Info */}
       <footer className="border-t border-slate-800/80 bg-slate-950 py-3 px-4 sm:px-6 text-center text-xs text-slate-500">
-        AI Account Manager PWA • ZLCE Lite Governance • IndexedDB Local Storage
+        AI Account Manager PWA • ZLCE Lite Governance • IndexedDB Local Storage • GitHub Pages Compatible
       </footer>
     </div>
   );
