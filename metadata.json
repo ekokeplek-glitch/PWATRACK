@@ -1,0 +1,6 @@
+{
+  "name": "AI Account Manager (PWA)",
+  "description": "PWA manajemen multi-akun AI dan status limit reset per layanan dengan penyimpanan lokal IndexedDB.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
