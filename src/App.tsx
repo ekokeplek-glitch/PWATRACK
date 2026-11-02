@@ -94,6 +94,7 @@ import {
   restoreFromSheet, 
   type ProbeResult 
 } from './backup/sheet-probe';
+import { seedTeamInitialData } from './storage/initial-data';
 
 interface TaskItem {
   id: string;
@@ -167,6 +168,11 @@ export default function App() {
   const [isSyncingSheet, setIsSyncingSheet] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // State Reset & Seed Data Log Tim Riil
+  const [showTeamResetModal, setShowTeamResetModal] = useState(false);
+  const [teamResetLoading, setTeamResetLoading] = useState(false);
+  const [teamResetNotice, setTeamResetNotice] = useState<string | null>(null);
+
   // State Form Person (TASK-005)
   const [ownerName, setOwnerName] = useState('');
   const [googleEmail, setGoogleEmail] = useState('');
@@ -198,12 +204,24 @@ export default function App() {
 
   const loadAllData = async () => {
     try {
-      const [allPersons, allServices, allAccess, dbSettings] = await Promise.all([
+      let [allPersons, allServices, allAccess, dbSettings] = await Promise.all([
         getAllPersons(),
         getAllServices(),
         getAllAccess(),
         getSettings(),
       ]);
+
+      // Jika database kosong, lakukan auto-seeding dari dataset riil log AI work
+      if (allPersons.length === 0 || allServices.length === 0) {
+        await seedTeamInitialData(false);
+        [allPersons, allServices, allAccess, dbSettings] = await Promise.all([
+          getAllPersons(),
+          getAllServices(),
+          getAllAccess(),
+          getSettings(),
+        ]);
+      }
+
       setPersons(allPersons);
       setServices(allServices);
       setAccessList(allAccess);
@@ -617,6 +635,24 @@ export default function App() {
     }
   };
 
+  const handleResetToTeamData = async () => {
+    setTeamResetLoading(true);
+    setTeamResetNotice(null);
+    try {
+      const stats = await seedTeamInitialData(true);
+      await loadAllData();
+      setShowTeamResetModal(false);
+      setTeamResetNotice(
+        `Berhasil menyinkronkan data awal dari log AI work: ${stats.personsCount} akun Google, ${stats.servicesCount} layanan AI, ${stats.accessCount} akses, ${stats.logsCount} riwayat log, dan ${stats.notesCount} catatan lanjutan!`
+      );
+    } catch (err: unknown) {
+      console.error(err);
+      if (err instanceof Error) setBackupError(`Gagal memuat data awal tim: ${err.message}`);
+    } finally {
+      setTeamResetLoading(false);
+    }
+  };
+
   const currentAccess = accessList.find((a) => a.id === selectedAccessId);
   const currentPerson = persons.find((p) => p.id === currentAccess?.personId);
   const currentService = services.find((s) => s.id === currentAccess?.serviceId);
@@ -780,6 +816,13 @@ export default function App() {
         )}
 
         {/* Global Notices */}
+        {teamResetNotice && (
+          <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs flex items-start gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <span>{teamResetNotice}</span>
+          </div>
+        )}
+
         {sessionNotice && (
           <div className="p-3.5 rounded-xl bg-sky-950/80 border border-sky-800 text-sky-300 text-xs flex items-start gap-2.5">
             <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
@@ -800,9 +843,18 @@ export default function App() {
             {/* Header Hero */}
             <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-sky-950/40 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="relative z-10 space-y-4">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  TASK-007: Dashboard & Switch Cepat (Maks. 2 Ketukan)
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800 text-xs font-medium">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    TASK-007: Dashboard & Switch Cepat (Maks. 2 Ketukan)
+                  </div>
+                  <button
+                    onClick={() => setShowTeamResetModal(true)}
+                    className="px-3.5 py-1.5 rounded-xl bg-sky-950/90 hover:bg-sky-900 border border-sky-800 text-sky-300 text-xs font-medium flex items-center gap-1.5 transition shadow-sm"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+                    Sinkron Data Log Tim (9 Akun)
+                  </button>
                 </div>
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-white">Dashboard Layanan & Rekomendasi Switch</h2>
@@ -1730,6 +1782,50 @@ export default function App() {
               </div>
             </div>
 
+            {/* Box 3: Data Awal Tim Riil dari log AI work */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-950 border border-amber-800 flex items-center justify-center text-amber-400 shrink-0">
+                    <Database className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-white">Data Awal Log Kerja Tim (log AI work CSV)</h3>
+                    <p className="text-xs text-slate-400">9 Akun Google riil, 4 Layanan AI utama, & 29 Log Pemakaian</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setShowTeamResetModal(true)}
+                  className="py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-600/20 transition self-start sm:self-auto shrink-0"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Muat Ulang Data Log Tim
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                  <span className="text-slate-400 text-[11px] block">9 Akun Google Tim</span>
+                  <p className="text-slate-200 font-medium truncate">
+                    Eko, Cxperia, Oned, Casavanza, Kepek, Layang, Sulistiyani, Gete60, Acimau
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                  <span className="text-slate-400 text-[11px] block">Layanan AI Utama</span>
+                  <p className="text-slate-200 font-medium truncate">
+                    Google AI Studio, Claude, ChatGPT, Freebuff
+                  </p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                  <span className="text-slate-400 text-[11px] block">Status Awal Terkini</span>
+                  <p className="text-emerald-400 font-medium truncate">
+                    Sulistiyani (Limited AI Studio), 8 Akun Lain (Ready)
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Panduan Deploy Apps Script */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
               <h4 className="text-sm font-bold text-white flex items-center gap-2">
@@ -2264,6 +2360,58 @@ export default function App() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Modal Konfirmasi Reset / Muat Ulang Data Log Tim */}
+        {showTeamResetModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-950 border border-amber-800 flex items-center justify-center text-amber-400">
+                  <RefreshCw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white">Muat Ulang Data Awal Log Tim</h4>
+                  <p className="text-xs text-slate-400">Berdasarkan file riwayat kerja log AI work (CSV)</p>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-2">
+                <p className="font-semibold text-slate-200">Data yang akan diinisialisasi ke IndexedDB:</p>
+                <ul className="list-disc list-inside space-y-1 text-slate-400">
+                  <li><strong className="text-slate-200">9 Akun Google Tim:</strong> Eko Keplek, Cxperia 575, Oned Acer, Casavanza, Kepek Malang, Layang Setrum, Sulistiyani, Gete60 GPS, Acimau (memenuhi BR-07 maks. 10 akun).</li>
+                  <li><strong className="text-slate-200">4 Layanan AI Utama:</strong> Google AI Studio, Anthropic Claude, OpenAI ChatGPT, Freebuff (+ DeepSeek).</li>
+                  <li><strong className="text-slate-200">Status Akses:</strong> Sulistiyani tercatat Limit di AI Studio (log 10/29), 8 akun lainnya status Ready.</li>
+                  <li><strong className="text-slate-200">Catatan Lanjutan (Handoff):</strong> Link repo aktif tim (sarungsari/Akun-MAN, PWATRACK, dsb).</li>
+                  <li><strong className="text-slate-200">Riwayat Pemakaian:</strong> 29 log pemakaian kronologis terstruktur.</li>
+                  <li><strong className="text-slate-200">Endpoint Apps Script:</strong> Web App exec yang tercatat di log tim.</li>
+                </ul>
+                <p className="text-amber-400 font-medium pt-1">
+                  Peringatan: Tindakan ini akan mereset dan memuat ulang seluruh dataset log tim ke dalam IndexedDB lokal.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowTeamResetModal(false)}
+                  disabled={teamResetLoading}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetToTeamData}
+                  disabled={teamResetLoading}
+                  className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shadow-lg shadow-sky-600/20"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${teamResetLoading ? 'animate-spin' : ''}`} />
+                  {teamResetLoading ? 'Memuat Data...' : 'Muat Data Log Tim'}
+                </button>
+              </div>
             </div>
           </div>
         )}

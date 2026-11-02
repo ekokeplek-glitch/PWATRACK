@@ -89,13 +89,14 @@ Status: `OPEN | CONFIRMED | REJECTED | ANSWERED`. Jika ragu, catat di sini dan t
 
 ## 6. CATATAN SERAH TERIMA (ditimpa; maks. ~10 baris)
 
-* [2026-10-29] Task batch TASK-006 s/d TASK-010 telah diselesaikan dan diverifikasi penuh.
-* [2026-10-29] 40 unit tests lolos (14 test files) via Vitest (`npm test`).
-* [2026-10-29] Linter `npm run lint` 0 error; build produksi `npm run build` sukses exit 0.
-* [2026-10-29] Dashboard & Switch Cepat (TASK-007) terintegrasi dengan hitung mundur live, banner auto-ready, dan rekomendasi akun ready berikutnya (<= 2 tap).
-* [2026-10-29] Riwayat & Catatan Lanjutan (TASK-008) terintegrasi dengan audit trail kronologis dan handoff note per layanan.
-* [2026-10-29] Ekspor/Impor JSON (TASK-009) dan Apps Script Probe (TASK-010) teruji roundtrip & bypass CORS text/plain.
-* [2026-10-29] Proyek siap melanjutkan ke TASK-011 (Backup & Restore Google Sheet Klien).
+* [2026-10-30] Data Awal Log Tim Riil disinkronkan ke IndexedDB dari berkas log AI work CSV (/public/assets/aistudio/log_AI_work_644062a3).
+* [2026-10-30] 9 Akun Google tim terdaftar unik: Eko Keplek, Cxperia 575, Oned Acer, Casavanza, Kepek Malang, Layang Setrum, Sulistiyani, Gete60 GPS, Acimau (memenuhi BR-07 <= 10 akun).
+* [2026-10-30] 4 Layanan AI utama terdaftar: Google AI Studio, Anthropic Claude, OpenAI ChatGPT, Freebuff (+ DeepSeek).
+* [2026-10-30] Status Akses Awal: Sulistiyani di AI Studio tercatat Limited (waktu reset Pacific midnight), 8 akun tim lainnya berstatus Ready.
+* [2026-10-30] 29 Log Pemakaian kronologis terstruktur dan Catatan Lanjutan tim (Handoff Notes) diisi sesuai riwayat repo & tautan applet tim.
+* [2026-10-30] Endpoint Web App Apps Script terhubung di Settings: https://script.google.com/macros/s/AKfycbxe9B7w3AQ7WMOEYeQg_31EiCuqNf5wpG1cF3xPEdLQCG6DLgrkfNs2lZFY4Q59X6BBNg/exec.
+* [2026-10-30] 44/44 unit tests lolos (15 test files) via Vitest (`npm test`). Build lolos bersih (`compile_applet` exit 0).
+* [2026-10-30] Tombol dan modal "Sinkron Data Log Tim" / "Muat Ulang Data Log Tim" tersedia di Dashboard dan tab Cadangan.
 
 ---
 

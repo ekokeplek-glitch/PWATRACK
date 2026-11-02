@@ -7,6 +7,14 @@ Mengikuti Keep a Changelog dan SemVer. Perubahan Level S (`[MINOR]`) dan task re
 ## [Unreleased]
 
 ### Added
+- [DATA-SYNC] Inisialisasi Data Awal Tim dari Berkas Log AI Work CSV (`src/storage/initial-data.ts`, `tests/initial-data.test.ts`):
+  - Ekstraksi 9 akun Google riil tim: Eko Keplek, Cxperia 575, Oned Acer, Casavanza, Kepek Malang, Layang Setrum, Sulistiyani, Gete60 GPS, Acimau (memenuhi BR-07 maks. 10 akun).
+  - 4 Layanan AI utama: Google AI Studio, Anthropic Claude, OpenAI ChatGPT, Freebuff (+ DeepSeek).
+  - Status Akses Awal: Sulistiyani di AI Studio tercatat Limited (reset Pacific midnight), 8 akun tim lainnya berstatus Ready.
+  - Catatan Lanjutan tim (Handoff Notes) berisi repositori tim (sarungsari/Akun-MAN, PWATRACK, dsb) dan tautan applet.
+  - 29 Log Pemakaian terstruktur berdasarkan baris CSV penting.
+  - Endpoint Apps Script Web App tersimpan di Settings lokal: `https://script.google.com/macros/s/AKfycbxe9B7w3AQ7WMOEYeQg_31EiCuqNf5wpG1cF3xPEdLQCG6DLgrkfNs2lZFY4Q59X6BBNg/exec`.
+  - Tombol dan modal konfirmasi "Sinkron Data Log Tim" pada Dashboard dan Tab Cadangan.
 - [TASK-010] Spike Integrasi Google Apps Script (CORS & Alur) (`apps-script/Code.gs`, `src/backup/sheet-probe.ts`, `tests/sheet-probe.test.ts`):
   - Solusi CORS terverifikasi menggunakan `Content-Type: text/plain;charset=utf-8` untuk melewati preflight `OPTIONS` browser.
   - Implementasi fungsi `probeAppsScript` untuk uji konektivitas dan pengukuran latensi jaringan real-time.
